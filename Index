@@ -1,0 +1,317 @@
+<?php
+session_start();
+require 'db.php';
+
+$loginMessage   = '';
+$postMessage    = '';
+$contactMessage = '';
+
+$currentUser = null;
+if (!empty($_SESSION['user_id'])) {
+    $currentUser = [
+        'id'       => $_SESSION['user_id'],
+        'username' => $_SESSION['username'] ?? ''
+    ];
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $form_type = $_POST['form_type'] ?? '';
+
+    /* LOGIN */
+    if ($form_type === 'login') {
+        $username = trim($_POST['username'] ?? '');
+        $email    = trim($_POST['email'] ?? '');
+
+        if ($username === '' || $email === '') {
+            $loginMessage = 'Please enter both Username and Email.';
+        } else {
+            $stmt = $pdo->prepare("SELECT * FROM users WHERE username = :username AND email = :email");
+            $stmt->execute([':username' => $username, ':email' => $email]);
+            $user = $stmt->fetch();
+
+            if ($user) {
+                $_SESSION['user_id']  = $user['id'];
+                $_SESSION['username'] = $user['username'];
+                $currentUser = ['id' => $user['id'], 'username' => $user['username']];
+                $loginMessage = 'Logged in successfully.';
+            } else {
+                $insert = $pdo->prepare("INSERT INTO users (username, email) VALUES (:username, :email)");
+                $insert->execute([':username' => $username, ':email' => $email]);
+
+                $newId = $pdo->lastInsertId();
+                $_SESSION['user_id']  = $newId;
+                $_SESSION['username'] = $username;
+                $currentUser = ['id' => $newId, 'username' => $username];
+
+                $loginMessage = 'New user created and logged in.';
+            }
+        }
+    }
+
+    /* LOGOUT */
+    if ($form_type === 'logout') {
+        session_unset();
+        session_destroy();
+        $currentUser = null;
+        $loginMessage = 'You have been logged out.';
+    }
+
+    /* ADD POST */
+    if ($form_type === 'add_post') {
+        if (empty($_SESSION['user_id'])) {
+            $postMessage = 'Please log in before adding a post.';
+        } else {
+            $title       = trim($_POST['title'] ?? '');
+            $description = trim($_POST['description'] ?? '');
+            $module_id   = (int)($_POST['module'] ?? 0);
+            $user_id     = (int)$_SESSION['user_id'];
+            $image_path  = null;
+
+            if ($title === '' || $description === '' || $module_id === 0) {
+                $postMessage = 'Please fill in the Title, Description and select a Module.';
+            } else {
+
+                if (!empty($_FILES['image']['name'])) {
+                    $uploadDir = __DIR__ . '/uploads/';
+                    if (!is_dir($uploadDir)) mkdir($uploadDir, 0777, true);
+
+                    $fileName   = time() . '_' . basename($_FILES['image']['name']);
+                    $targetPath = $uploadDir . $fileName;
+
+                    if (move_uploaded_file($_FILES['image']['tmp_name'], $targetPath)) {
+                        $image_path = 'uploads/' . $fileName;
+                    }
+                }
+
+                $sql = "INSERT INTO posts (title, description, image_path, user_id, module_id)
+                        VALUES (:title, :description, :image_path, :user_id, :module_id)";
+                $stmt = $pdo->prepare($sql);
+                $stmt->execute([
+                    ':title' => $title, ':description' => $description,
+                    ':image_path' => $image_path, ':user_id' => $user_id,
+                    ':module_id' => $module_id
+                ]);
+
+                $postMessage = 'Post added successfully.';
+            }
+        }
+    }
+
+    /* CONTACT */
+    if ($form_type === 'contact') {
+        $name    = trim($_POST['name'] ?? '');
+        $email   = trim($_POST['email'] ?? '');
+        $message = trim($_POST['message'] ?? '');
+
+        if ($name === '' || $email === '' || $message === '') {
+            $contactMessage = 'Please fill in the Name, Email and Message fields completely.';
+        } else {
+            $contactMessage = 'Your message has been sent.';
+        }
+    }
+}
+
+/* FETCH DATA */
+$modules = $pdo->query("SELECT * FROM modules ORDER BY name")->fetchAll();
+$users   = $pdo->query("SELECT * FROM users ORDER BY username")->fetchAll();
+$posts   = $pdo->query("
+    SELECT p.*, u.username, m.name AS module_name 
+    FROM posts p
+    JOIN users u ON p.user_id = u.id
+    JOIN modules m ON p.module_id = m.id
+    ORDER BY p.created_at DESC
+")->fetchAll();
+?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Student Forum</title>
+
+<style>
+    body { font-family: Arial, sans-serif; background:#f8f9fa; margin:0; padding:0; }
+    header { background:#004080; color:white; padding:15px 0; text-align:center; }
+    nav { background:#0066cc; padding:10px 0; }
+    .nav-inner { max-width:1000px; margin:0 auto; display:flex; justify-content:space-between; align-items:center; }
+    .nav-links a { color:white; margin:0 8px; text-decoration:none; font-weight:bold; }
+    .nav-links a:hover { text-decoration:underline; }
+    .nav-user { color:white; font-size:0.9rem; }
+    main { max-width:1000px; margin:20px auto; background:white; padding:20px; box-shadow:0 0 8px rgba(0,0,0,0.1); }
+    h2 { color:#004080; border-bottom:2px solid #004080; padding-bottom:5px; }
+    table { width:100%; border-collapse:collapse; margin-bottom:20px; }
+    th, td { border:1px solid #ccc; padding:8px; text-align:left; }
+    th { background:#004080; color:white; }
+    tr:nth-child(even) { background:#f2f2f2; }
+    form { background:#eef3f7; padding:15px; border-radius:5px; }
+    input, select, textarea { width:100%; padding:8px; margin-bottom:10px; border:1px solid #ccc; border-radius:4px; }
+    input[type=submit] { background:#004080; color:white; border:none; cursor:pointer; }
+    input[type=submit]:hover { background:#0066cc; }
+    .flash-success { background:#d4edda; padding:10px; border-radius:5px; color:#155724; }
+    .flash-error { background:#f8d7da; padding:10px; border-radius:5px; color:#721c24; }
+    li { background:#eef3f7; padding:10px; margin-bottom:10px; border-radius:5px; }
+</style>
+
+</head>
+<body>
+
+<header><h1>Student Forum</h1></header>
+
+<nav>
+  <div class="nav-inner">
+    <div class="nav-links">
+      <a href="#posts">Posts</a> |
+      <a href="#add-post">Add Post</a> |
+      <a href="#users">Users</a> |
+      <a href="#modules">Modules</a> |
+      <a href="#contact">Contact</a>
+    </div>
+
+    <div class="nav-user">
+      <?php if ($currentUser): ?>
+        Logged in as <strong><?= htmlspecialchars($currentUser['username']) ?></strong>
+        <form method="post" style="display:inline;">
+            <input type="hidden" name="form_type" value="logout">
+            <input type="submit" value="Logout">
+        </form>
+      <?php else: ?>
+        <form method="post">
+            <input type="hidden" name="form_type" value="login">
+            <input type="text" name="username" placeholder="Username" required>
+            <input type="email" name="email" placeholder="Email" required>
+            <input type="submit" value="Login">
+        </form>
+      <?php endif; ?>
+    </div>
+  </div>
+</nav>
+
+<main>
+
+<?php if ($loginMessage): ?>
+  <div class="<?= strpos($loginMessage,'Please')===0?'flash-error':'flash-success' ?>">
+    <?= htmlspecialchars($loginMessage) ?>
+  </div>
+<?php endif; ?>
+
+
+
+<section id="posts">
+  <h2>All Posts</h2>
+  <ul>
+    <?php foreach ($posts as $post): ?>
+      <li>
+        <strong><?= htmlspecialchars($post['title']) ?></strong><br>
+        Posted by <em><?= htmlspecialchars($post['username']) ?></em>
+        (Module: <?= htmlspecialchars($post['module_name']) ?>)
+        <br><small><?= htmlspecialchars($post['created_at']) ?></small>
+        <p><?= nl2br(htmlspecialchars($post['description'])) ?></p>
+        <?php if ($post['image_path']): ?>
+          <img src="<?= $post['image_path'] ?>" style="max-width:200px;border:1px solid #ccc;">
+        <?php endif; ?>
+      </li>
+    <?php endforeach; ?>
+  </ul>
+</section>
+
+
+
+<section id="add-post">
+  <h2>Add New Post</h2>
+
+  <?php if ($postMessage): ?>
+    <div class="<?= strpos($postMessage,'Please')===0?'flash-error':'flash-success' ?>">
+      <?= htmlspecialchars($postMessage) ?>
+    </div>
+  <?php endif; ?>
+
+  <form method="post" enctype="multipart/form-data">
+    <input type="hidden" name="form_type" value="add_post">
+    <label>Title:</label>
+    <input type="text" name="title" required>
+
+    <label>Description:</label>
+    <textarea name="description" required></textarea>
+
+    <label>Module:</label>
+    <select name="module" required>
+      <option value="">Select a module</option>
+      <?php foreach ($modules as $m): ?>
+        <option value="<?= $m['id'] ?>"><?= htmlspecialchars($m['name']) ?></option>
+      <?php endforeach; ?>
+    </select>
+
+    <label>Screenshot:</label>
+    <input type="file" name="image">
+
+    <input type="submit" value="Submit Post">
+  </form>
+</section>
+
+<section id="users">
+  <h2>Users</h2>
+  <table>
+    <tr><th>Username</th><th>Email</th><th>Actions</th></tr>
+    <?php foreach ($users as $u): ?>
+      <tr>
+        <td><?= htmlspecialchars($u['username']) ?></td>
+        <td><?= htmlspecialchars($u['email']) ?></td>
+        <td>
+          <a href="edit_user.php?id=<?= $u['id'] ?>">Edit</a> |
+          <a href="delete_user.php?id=<?= $u['id'] ?>" onclick="return confirm('Delete user?')">Delete</a>
+        </td>
+      </tr>
+    <?php endforeach; ?>
+  </table>
+</section>
+
+
+<section id="modules">
+  <h2>Modules</h2>
+  <table>
+    <tr><th>Module Name</th><th>Actions</th></tr>
+    <?php foreach ($modules as $m): ?>
+      <tr>
+        <td><?= htmlspecialchars($m['name']) ?></td>
+        <td>
+          <a href="edit_module.php?id=<?= $m['id'] ?>">Edit</a> |
+          <a href="delete_module.php?id=<?= $m['id'] ?>" onclick="return confirm('Delete module?')">Delete</a>
+        </td>
+      </tr>
+    <?php endforeach; ?>
+  </table>
+</section>
+
+
+<section id="contact">
+  <h2>Contact Admin</h2>
+
+  <?php if ($contactMessage): ?>
+    <div class="<?= strpos($contactMessage,'Please')===0?'flash-error':'flash-success' ?>">
+      <?= htmlspecialchars($contactMessage) ?>
+    </div>
+  <?php endif; ?>
+
+  <form method="post">
+    <input type="hidden" name="form_type" value="contact">
+
+    <label>Name:</label>
+    <input type="text" name="name" required>
+
+    <label>Email:</label>
+    <input type="email" name="email" required>
+
+    <label>Message:</label>
+    <textarea name="message" required></textarea>
+
+    <input type="submit" value="Send Message">
+  </form>
+</section>
+
+</main>
+
+<footer>
+  <p>&copy; 2025 Student Forum</p>
+</footer>
+
+</body>
+</html>
